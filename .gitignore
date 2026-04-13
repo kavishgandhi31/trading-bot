@@ -39,3 +39,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# trading bot — local runtime files
+backend/reports/*.json
+backend/scheduler/schedules.json
+backend/scheduler/scheduler.log
+backend/venv/

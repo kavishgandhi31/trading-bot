@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.tradingbot.scheduler</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/kavishgandhi/trading-bot/backend/venv/bin/python3.12</string>
+        <string>/Users/kavishgandhi/trading-bot/backend/scheduler/runner.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/kavishgandhi/trading-bot/backend</string>
+
+    <!-- Run every 60 minutes -->
+    <key>StartInterval</key>
+    <integer>3600</integer>
+
+    <!-- Also run at load (startup) -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- Logging -->
+    <key>StandardOutPath</key>
+    <string>/Users/kavishgandhi/trading-bot/backend/scheduler/scheduler.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/kavishgandhi/trading-bot/backend/scheduler/scheduler.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/kavishgandhi/trading-bot/backend/venv/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+</dict>
+</plist>

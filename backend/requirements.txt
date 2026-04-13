@@ -1,0 +1,8 @@
+anthropic
+yfinance
+google-api-python-client
+python-dotenv
+requests
+beautifulsoup4
+sec-edgar-downloader
+pandas
