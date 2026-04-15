@@ -1,6 +1,6 @@
 # Trading Bot
 
-AI-powered stock research platform that fetches data from multiple sources, runs a 7-stage analysis pipeline using Claude, and delivers reports via email and an interactive web dashboard.
+AI-powered stock research platform that fetches data from multiple sources, runs a 7-stage analysis pipeline using Claude, delivers reports to an interactive web dashboard, and lets you debate every thesis with Claude in a streaming chat panel.
 
 ---
 
@@ -17,9 +17,10 @@ For any stock ticker, the bot:
    - Technical analysis
    - Bull vs bear synthesis
    - Trade setup (entry, stop-loss, price targets)
-3. **Generates a report** saved as JSON and viewable on the dashboard
-4. **Emails the report** in a formatted HTML layout
+3. **Saves the report** as JSON and renders it on the dashboard; prior versions are auto-archived so only the latest shows
+4. **Optionally emails the report** in a formatted HTML layout (toggle per run or per schedule)
 5. **Runs on a schedule** you configure from the dashboard
+6. **Debate the thesis with Claude** — per-ticker chat panel with streaming responses, web search, PDF/article uploads, and prompt-cached access to the full report as context
 
 ---
 
@@ -80,25 +81,43 @@ EMAIL_RECIPIENT=recipient@gmail.com
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) to view reports and manage schedules.
+Open [http://localhost:3000](http://localhost:3000) to view reports, generate new ones on demand, manage schedules, and open the chat panel.
 
-### Generate a report manually
+### Generate a report from the dashboard
+
+The fastest path: use the **Generate a report** card at the top of the dashboard.
+
+1. Type a ticker (e.g. `NVDA`)
+2. Toggle **Email report** on if you also want it emailed; leave off to save to the dashboard only
+3. Click **Generate** — the pipeline runs in the background (3–8 min) with a live progress tail; the report appears on the dashboard when it's done
+
+### Chat with Claude about any ticker
+
+Every report has an attached chat panel with Claude Sonnet 4.6 loaded with your full report as context.
+
+- From the dashboard, click the **💬 Chat** pill on any report card — or open a report and click **💬 Debate [TICKER]**
+- Stream back-and-forth debate, push back on risks, ask for a verdict
+- Drop in a PDF article or paste a bullish/bearish piece for Claude to critique
+- Web search is enabled — Claude pulls fresh prices, filings, news when asked
+- **Regenerate** from inside the chat: triggers the 7-stage pipeline, archives the old report, and auto-asks Claude for an updated verdict against the new baseline
+
+### Generate a report from the CLI
 
 ```bash
 cd backend
 source venv/bin/activate
 
-# Single ticker
+# Single ticker (emails by default)
 python3.12 main.py NVDA
 
 # Multiple tickers
 python3.12 main.py NVDA AAPL TSLA
 
-# Without sending email
+# Without sending email (dashboard only)
 python3.12 main.py --no-email NVDA
 ```
 
-Reports are saved to `backend/reports/` and appear on the dashboard automatically.
+Reports are saved to `backend/reports/` and appear on the dashboard automatically. Any previous report for the same ticker is moved to `backend/reports/archive/`.
 
 ### Set up the scheduler
 
@@ -126,23 +145,29 @@ cd backend/scheduler
 ```
 trading-bot/
 ├── app/                          # Next.js frontend (dashboard)
-│   ├── page.tsx                  # Dashboard landing page
+│   ├── page.tsx                  # Dashboard (quick-generate, reports list, scheduler)
 │   ├── report/[slug]/            # Report detail view
 │   ├── components/               # React components
+│   │   ├── ChatPanel             # Per-ticker chat (streaming, web search, PDF upload)
+│   │   ├── QuickGenerate         # One-off report form with email toggle
 │   │   ├── CollapsibleSection    # Animated dropdown sections
 │   │   ├── HelperText            # "What this means" tooltips
 │   │   ├── ScoreCard             # Score bar display
 │   │   ├── ScheduleManager       # Schedule CRUD + scheduler control
+│   │   ├── RecipientManager      # Email recipients CRUD
 │   │   ├── TradeSetup            # Price targets & action plan
 │   │   ├── VerdictBanner         # Verdict display
 │   │   └── sections/             # Deep dive section components
 │   └── api/
-│       ├── reports/              # GET report list & detail
+│       ├── chat/[ticker]/        # Per-ticker streaming chat (GET / POST / DELETE)
+│       ├── reports/              # GET report list & detail (dedupes by ticker)
+│       ├── recipients/           # Email recipients CRUD
 │       ├── schedules/            # CRUD for scheduled tickers
+│       │   └── run/              # Spawn pipeline + job tracking (used by QuickGenerate + chat regenerate)
 │       └── scheduler/            # Start/stop scheduler engine
 │
 ├── backend/
-│   ├── main.py                   # CLI entry point
+│   ├── main.py                   # CLI entry point; archives prior reports on save
 │   ├── data/
 │   │   ├── stock_data.py         # yfinance fetcher
 │   │   ├── sec_data.py           # SEC EDGAR filings
@@ -158,7 +183,10 @@ trading-bot/
 │   │   ├── runner.py             # Checks due schedules & runs them
 │   │   ├── schedules.json        # Schedule data
 │   │   └── install.sh            # launchd install/uninstall
-│   └── reports/                  # Generated report JSON files
+│   ├── chat/                     # Chat history per ticker (JSON)
+│   └── reports/
+│       ├── *.json                # Latest report per ticker
+│       └── archive/              # Previous versions, auto-moved on regeneration
 │
 └── package.json
 ```
@@ -169,9 +197,10 @@ trading-bot/
 
 | Layer | Technology |
 |-------|-----------|
-| Frontend | Next.js 16, React 19, Tailwind CSS v4 |
+| Frontend | Next.js 16, React 19, Tailwind CSS v4, react-markdown |
 | Backend | Python 3.12 |
-| AI | Claude Opus 4.6 (deep analysis), Claude Sonnet 4.6 (macro screen) |
+| AI | Claude Opus 4.6 (deep analysis), Claude Sonnet 4.6 (macro screen + chat) |
+| AI tools | Anthropic SDK with web search tool + prompt caching |
 | Data | yfinance, SEC EDGAR, YouTube Data API v3 |
 | Email | Gmail SMTP with app passwords |
 | Scheduler | macOS launchd |
