@@ -52,11 +52,24 @@ def fetch_all_data(ticker: str) -> dict:
 
 def save_report(report: dict, ticker: str):
     os.makedirs("reports", exist_ok=True)
+    os.makedirs("reports/archive", exist_ok=True)
     date = datetime.now().strftime("%Y-%m-%d")
-    path = f"reports/{ticker}_{date}.json"
-    with open(path, "w") as f:
+    new_path = f"reports/{ticker}_{date}.json"
+
+    # Archive any prior reports for this ticker so the dashboard shows only the latest.
+    for f in os.listdir("reports"):
+        if not f.endswith(".json"):
+            continue
+        if not f.upper().startswith(f"{ticker.upper()}_"):
+            continue
+        src = f"reports/{f}"
+        if os.path.abspath(src) == os.path.abspath(new_path):
+            continue
+        os.replace(src, f"reports/archive/{f}")
+
+    with open(new_path, "w") as f:
         json.dump(report, f, indent=2, default=str)
-    print(f"  Report saved to {path}")
+    print(f"  Report saved to {new_path}")
 
 
 def research_ticker(ticker: str, send_email: bool = True):

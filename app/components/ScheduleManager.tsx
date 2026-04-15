@@ -126,46 +126,65 @@ export default function ScheduleManager() {
     fetchSchedules();
   }
 
-  async function deleteSchedule(id: string) {
+  async function deleteSchedule(id: string, tickerName: string) {
+    if (!confirm(`Remove the ${tickerName} schedule? This does not delete any existing reports.`)) return;
     await fetch(`/api/schedules/${id}`, { method: "DELETE" });
     fetchSchedules();
   }
 
   return (
     <div className="space-y-4">
-      {/* Scheduler engine control */}
-      <div className={`flex items-center justify-between rounded-lg px-5 py-3.5 border ${schedulerRunning ? "bg-emerald-50 border-emerald-200" : "bg-slate-50 border-slate-200"}`}>
-        <div className="flex items-center gap-3">
-          <span className={`w-2.5 h-2.5 rounded-full ${schedulerRunning ? "bg-emerald-500 animate-pulse" : "bg-slate-300"}`} />
-          <div>
-            <span className="text-sm font-semibold text-slate-800">
-              Scheduler {schedulerRunning ? "Running" : "Stopped"}
-            </span>
-            <span className="text-xs text-slate-400 ml-2">
-              {schedulerRunning ? "Checks every hour for due reports" : "Enable to run reports automatically"}
-            </span>
+      {/* Section intro */}
+      <p className="text-xs text-slate-500 leading-relaxed">
+        Run reports automatically on a recurring cadence. Each ticker has its own frequency and email preference.
+        The automation engine must be on for any schedule to fire. For one-off reports, use <span className="font-semibold text-slate-700">Generate a report</span> at the top.
+      </p>
+
+      {/* Automation engine control */}
+      <div
+        className={`rounded-lg px-5 py-4 border ${
+          schedulerRunning ? "bg-emerald-50 border-emerald-200" : "bg-slate-50 border-slate-200"
+        }`}
+      >
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-start gap-3 min-w-0">
+            <span
+              className={`w-2.5 h-2.5 rounded-full mt-1.5 shrink-0 ${
+                schedulerRunning ? "bg-emerald-500 animate-pulse" : "bg-slate-300"
+              }`}
+            />
+            <div>
+              <div className="text-sm font-semibold text-slate-900">
+                Automation engine {schedulerRunning ? "is on" : "is off"}
+              </div>
+              <div className="text-xs text-slate-500 mt-0.5 leading-relaxed">
+                {schedulerRunning
+                  ? "A macOS background process checks every hour for any enabled schedule that's due."
+                  : "Turn this on and enabled schedules below will run automatically at their chosen cadence."}
+              </div>
+            </div>
           </div>
-        </div>
-        <div className="flex items-center gap-2">
-          {schedulerLog && (
+          <div className="flex items-center gap-2 shrink-0">
+            {schedulerLog && (
+              <button
+                onClick={() => setShowLog(!showLog)}
+                className="text-xs text-slate-500 hover:text-slate-800 transition-colors"
+              >
+                {showLog ? "Hide log" : "View log"}
+              </button>
+            )}
             <button
-              onClick={() => setShowLog(!showLog)}
-              className="text-xs text-slate-400 hover:text-slate-600 cursor-pointer transition-colors"
+              onClick={toggleScheduler}
+              disabled={toggling}
+              className={`text-sm font-semibold px-4 py-1.5 rounded-lg transition-colors disabled:opacity-50 ${
+                schedulerRunning
+                  ? "bg-red-100 text-red-700 hover:bg-red-200"
+                  : "bg-emerald-600 text-white hover:bg-emerald-700"
+              }`}
             >
-              {showLog ? "Hide log" : "View log"}
+              {toggling ? "…" : schedulerRunning ? "Turn off" : "Turn on"}
             </button>
-          )}
-          <button
-            onClick={toggleScheduler}
-            disabled={toggling}
-            className={`text-sm font-semibold px-4 py-1.5 rounded-lg transition-colors cursor-pointer disabled:opacity-50 ${
-              schedulerRunning
-                ? "bg-red-100 text-red-700 hover:bg-red-200"
-                : "bg-emerald-600 text-white hover:bg-emerald-700"
-            }`}
-          >
-            {toggling ? "..." : schedulerRunning ? "Stop" : "Start"}
-          </button>
+          </div>
         </div>
       </div>
 
@@ -176,103 +195,142 @@ export default function ScheduleManager() {
         </pre>
       )}
 
-      {/* Add form */}
-      <form onSubmit={addSchedule} className="flex gap-3">
-        <input
-          type="text"
-          value={ticker}
-          onChange={(e) => setTicker(e.target.value.toUpperCase())}
-          placeholder="TICKER"
-          className="flex-1 max-w-[140px] bg-white border border-slate-300 rounded-lg px-4 py-2.5 text-sm font-bold text-slate-900 placeholder:text-slate-400 placeholder:font-normal focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-        />
-        <select
-          value={frequency}
-          onChange={(e) => setFrequency(e.target.value)}
-          className="bg-white border border-slate-300 rounded-lg pl-3 pr-8 py-2.5 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none bg-[url('data:image/svg+xml;charset=UTF-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2214%22%20height%3D%2214%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%2394a3b8%22%20stroke-width%3D%222.5%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22m6%209%206%206%206-6%22%2F%3E%3C%2Fsvg%3E')] bg-[length:14px] bg-[right_8px_center] bg-no-repeat"
-        >
-          <option value="daily">Daily</option>
-          <option value="weekly">Weekly</option>
-          <option value="biweekly">Every 2 weeks</option>
-          <option value="monthly">Monthly</option>
-        </select>
-        <button
-          type="submit"
-          disabled={loading || !ticker.trim()}
-          className="bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white text-sm font-semibold px-5 py-2.5 rounded-lg transition-colors cursor-pointer disabled:cursor-not-allowed"
-        >
-          {loading ? "Adding..." : "Add Schedule"}
-        </button>
-      </form>
-
-      {error && (
-        <p className="text-sm text-red-500 font-medium">{error}</p>
-      )}
+      {/* Add schedule form */}
+      <div className="bg-white rounded-lg border border-slate-200 p-4">
+        <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">
+          Add a recurring ticker
+        </div>
+        <form onSubmit={addSchedule} className="flex flex-col sm:flex-row gap-2.5">
+          <input
+            type="text"
+            value={ticker}
+            onChange={(e) => setTicker(e.target.value.toUpperCase())}
+            placeholder="e.g. NVDA"
+            className="flex-1 sm:max-w-[160px] bg-white border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono font-bold text-slate-900 placeholder:text-slate-400 placeholder:font-sans placeholder:font-normal focus:outline-none focus:border-slate-500"
+          />
+          <select
+            value={frequency}
+            onChange={(e) => setFrequency(e.target.value)}
+            className="bg-white border border-slate-300 rounded-lg pl-3 pr-8 py-2 text-sm text-slate-700 focus:outline-none focus:border-slate-500 appearance-none bg-[url('data:image/svg+xml;charset=UTF-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2214%22%20height%3D%2214%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%2394a3b8%22%20stroke-width%3D%222.5%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22m6%209%206%206%206-6%22%2F%3E%3C%2Fsvg%3E')] bg-[length:14px] bg-[right_8px_center] bg-no-repeat"
+          >
+            {Object.entries(FREQ_LABELS).map(([v, l]) => (
+              <option key={v} value={v}>{l}</option>
+            ))}
+          </select>
+          <button
+            type="submit"
+            disabled={loading || !ticker.trim()}
+            className="bg-slate-900 hover:bg-slate-700 disabled:bg-slate-300 text-white text-sm font-semibold px-4 py-2 rounded-lg disabled:cursor-not-allowed"
+          >
+            {loading ? "Adding…" : "Add schedule"}
+          </button>
+        </form>
+        {error && <p className="text-xs text-red-600 font-medium mt-2">{error}</p>}
+      </div>
 
       {/* Schedule list */}
       {schedules.length === 0 ? (
-        <p className="text-sm text-slate-400 py-4">
-          No schedules yet. Add a ticker above to start receiving automated reports.
-        </p>
+        <div className="bg-white rounded-lg border border-slate-200 px-5 py-8 text-center">
+          <p className="text-sm text-slate-500">No recurring schedules yet.</p>
+          <p className="text-xs text-slate-400 mt-1">Add a ticker above to run it automatically.</p>
+        </div>
       ) : (
-        <div className="space-y-2">
-          {schedules.map((s) => (
-            <div
-              key={s.id}
-              className={`flex items-center gap-4 bg-white border rounded-lg px-5 py-3.5 transition-opacity ${s.enabled ? "border-slate-200" : "border-slate-200 opacity-50"}`}
-            >
-              {/* Toggle */}
-              <button
-                onClick={() => toggleEnabled(s.id, !s.enabled)}
-                className={`relative w-11 h-6 rounded-full transition-colors cursor-pointer shrink-0 ${s.enabled ? "bg-emerald-500" : "bg-slate-300"}`}
-                title={s.enabled ? "Disable" : "Enable"}
+        <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
+          {/* Column headers */}
+          <div className="grid grid-cols-[auto_auto_1fr_auto_auto_auto] items-center gap-3 px-5 py-2 border-b border-slate-200 bg-slate-50 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+            <span className="w-11">Active</span>
+            <span className="w-16">Ticker</span>
+            <span>Runs</span>
+            <span>Email</span>
+            <span>Last run</span>
+            <span className="w-6" />
+          </div>
+
+          <ul>
+            {schedules.map((s, i) => (
+              <li
+                key={s.id}
+                className={`grid grid-cols-[auto_auto_1fr_auto_auto_auto] items-center gap-3 px-5 py-3 ${
+                  i !== schedules.length - 1 ? "border-b border-slate-100" : ""
+                } ${s.enabled ? "" : "opacity-60"}`}
               >
-                <span
-                  className={`absolute top-[3px] left-[3px] w-[18px] h-[18px] bg-white rounded-full shadow transition-transform duration-200 ${s.enabled ? "translate-x-5" : "translate-x-0"}`}
-                />
-              </button>
+                {/* Active toggle */}
+                <button
+                  onClick={() => toggleEnabled(s.id, !s.enabled)}
+                  role="switch"
+                  aria-checked={s.enabled}
+                  className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${
+                    s.enabled ? "bg-emerald-500" : "bg-slate-300"
+                  }`}
+                  title={s.enabled ? "Enabled — pause this schedule" : "Paused — click to resume"}
+                >
+                  <span
+                    className={`absolute top-[3px] left-[3px] w-[18px] h-[18px] bg-white rounded-full shadow transition-transform duration-200 ${
+                      s.enabled ? "translate-x-5" : "translate-x-0"
+                    }`}
+                  />
+                </button>
 
-              {/* Ticker */}
-              <span className="text-lg font-extrabold text-slate-900 tracking-tight w-16">
-                {s.ticker}
-              </span>
+                {/* Ticker */}
+                <span className="text-base font-extrabold text-slate-900 tracking-tight w-16">
+                  {s.ticker}
+                </span>
 
-              {/* Frequency selector */}
-              <select
-                value={s.frequency}
-                onChange={(e) => updateFrequency(s.id, e.target.value)}
-                className="text-xs bg-slate-50 border border-slate-200 rounded pl-2.5 pr-6 py-1 text-slate-600 focus:outline-none appearance-none bg-[url('data:image/svg+xml;charset=UTF-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2212%22%20height%3D%2212%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%2394a3b8%22%20stroke-width%3D%222.5%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22m6%209%206%206%206-6%22%2F%3E%3C%2Fsvg%3E')] bg-[length:12px] bg-[right_6px_center] bg-no-repeat"
-              >
-                {Object.entries(FREQ_LABELS).map(([val, label]) => (
-                  <option key={val} value={val}>
-                    {label}
-                  </option>
-                ))}
-              </select>
+                {/* Frequency */}
+                <select
+                  value={s.frequency}
+                  onChange={(e) => updateFrequency(s.id, e.target.value)}
+                  disabled={!s.enabled}
+                  className="text-xs bg-slate-50 border border-slate-200 rounded pl-2.5 pr-6 py-1 text-slate-700 focus:outline-none appearance-none bg-[url('data:image/svg+xml;charset=UTF-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2212%22%20height%3D%2212%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%2394a3b8%22%20stroke-width%3D%222.5%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22m6%209%206%206%206-6%22%2F%3E%3C%2Fsvg%3E')] bg-[length:12px] bg-[right_6px_center] bg-no-repeat w-fit disabled:opacity-60"
+                  title="How often this ticker runs"
+                >
+                  {Object.entries(FREQ_LABELS).map(([val, label]) => (
+                    <option key={val} value={val}>{label}</option>
+                  ))}
+                </select>
 
-              {/* Email toggle */}
-              <button
-                onClick={() => toggleEmail(s.id, !s.send_email)}
-                className={`text-xs font-medium px-2.5 py-1 rounded cursor-pointer transition-colors ${s.send_email ? "bg-blue-100 text-blue-700" : "bg-slate-100 text-slate-400"}`}
-                title={s.send_email ? "Email enabled" : "Email disabled"}
-              >
-                {s.send_email ? "Email ON" : "Email OFF"}
-              </button>
+                {/* Email toggle */}
+                <button
+                  onClick={() => toggleEmail(s.id, !s.send_email)}
+                  className={`text-xs font-medium px-2.5 py-1 rounded flex items-center gap-1.5 transition-colors ${
+                    s.send_email
+                      ? "bg-blue-100 text-blue-700 hover:bg-blue-200"
+                      : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+                  }`}
+                  title={
+                    s.send_email
+                      ? "Emails go to all recipients when this runs. Click to disable."
+                      : "Emails off. Report still saves to the dashboard. Click to enable."
+                  }
+                >
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z" />
+                    <polyline points="22,6 12,13 2,6" />
+                  </svg>
+                  {s.send_email ? "On" : "Off"}
+                </button>
 
-              {/* Last run */}
-              <span className="text-xs text-slate-400 ml-auto">
-                {s.last_run ? `Last run: ${timeAgo(s.last_run)}` : "Never run"}
-              </span>
+                {/* Last run */}
+                <span className="text-[11px] text-slate-500 whitespace-nowrap">
+                  {s.last_run ? timeAgo(s.last_run) : "Never"}
+                </span>
 
-              {/* Delete */}
-              <button
-                onClick={() => deleteSchedule(s.id)}
-                className="text-slate-300 hover:text-red-500 transition-colors cursor-pointer text-lg leading-none"
-                title="Remove schedule"
-              >
-                &times;
-              </button>
-            </div>
-          ))}
+                {/* Delete */}
+                <button
+                  onClick={() => deleteSchedule(s.id, s.ticker)}
+                  className="text-slate-300 hover:text-red-500 transition-colors p-1 -mr-1"
+                  title="Remove this schedule"
+                  aria-label={`Remove ${s.ticker} schedule`}
+                >
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M3 6h18" />
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+                    <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                  </svg>
+                </button>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
     </div>

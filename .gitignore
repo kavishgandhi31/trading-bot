@@ -42,6 +42,16 @@ next-env.d.ts
 
 # trading bot — local runtime files
 backend/reports/*.json
+backend/reports/archive/*.json
 backend/scheduler/schedules.json
 backend/scheduler/scheduler.log
+backend/config.json
 backend/venv/
+backend/chat/*.json
+
+# python bytecode
+**/__pycache__/
+*.pyc
+
+# local claude code state
+.claude/scheduled_tasks.lock

@@ -1,4 +1,5 @@
 import os
+import json
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -9,7 +10,25 @@ load_dotenv()
 
 EMAIL_SENDER = os.getenv("EMAIL_SENDER")
 EMAIL_APP_PASSWORD = os.getenv("EMAIL_APP_PASSWORD")
-EMAIL_RECIPIENT = os.getenv("EMAIL_RECIPIENT")
+_FALLBACK_RECIPIENT = os.getenv("EMAIL_RECIPIENT")
+
+CONFIG_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config.json")
+
+
+def get_recipients() -> list[str]:
+    """Return the configured recipient list, falling back to .env value."""
+    try:
+        with open(CONFIG_FILE) as f:
+            data = json.load(f)
+        recipients = [r for r in data.get("recipients", []) if r.strip()]
+        if recipients:
+            return recipients
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    # Fall back to .env value
+    if _FALLBACK_RECIPIENT:
+        return [_FALLBACK_RECIPIENT]
+    return []
 
 
 def _safe(data: dict, *keys, default="Not available"):
@@ -99,14 +118,19 @@ def build_html_report(report: dict) -> str:
     t_score = technicals.get("technicals_score", "—")
 
     # ── Trade setup values ────────────────────────────────────────────────
-    entry_low = _safe(trade, "entry_zone", "low")
-    entry_high = _safe(trade, "entry_zone", "high")
-    entry_zone = f"${entry_low} – ${entry_high}" if entry_low != "Not available" else "See analysis"
-    stop_price = _safe(trade, "stop_loss", "price")
-    stop_label = f"${stop_price}" if stop_price != "Not available" else "See analysis"
-    base_price = _safe(trade, "price_targets", "base", "price")
-    bull_price = _safe(trade, "price_targets", "bull", "price")
-    bear_price = _safe(trade, "price_targets", "bear", "price")
+    # Strip any leading "$" so we never double-prefix when the LLM already included it.
+    def _strip_dollar(v):
+        s = str(v) if v is not None else ""
+        return s.lstrip().lstrip("$").lstrip()
+
+    entry_low = _strip_dollar(_safe(trade, "entry_zone", "low"))
+    entry_high = _strip_dollar(_safe(trade, "entry_zone", "high"))
+    entry_zone = f"${entry_low} – ${entry_high}" if entry_low and entry_low != "Not available" else "See analysis"
+    stop_price = _strip_dollar(_safe(trade, "stop_loss", "price"))
+    stop_label = f"${stop_price}" if stop_price and stop_price != "Not available" else "See analysis"
+    base_price = _strip_dollar(_safe(trade, "price_targets", "base", "price"))
+    bull_price = _strip_dollar(_safe(trade, "price_targets", "bull", "price"))
+    bear_price = _strip_dollar(_safe(trade, "price_targets", "bear", "price"))
     rr_ratio = _safe(trade, "risk_reward_ratio")
 
     # ── Catalysts ─────────────────────────────────────────────────────────
@@ -427,21 +451,26 @@ def build_html_report(report: dict) -> str:
 def send_report(report: dict) -> bool:
     ticker = report.get("ticker", "UNKNOWN")
     date = datetime.now().strftime("%Y-%m-%d")
+    recipients = get_recipients()
+
+    if not recipients:
+        print("  No recipients configured. Add emails from the dashboard.")
+        return False
 
     html_body = build_html_report(report)
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = f"Research Report — ${ticker} — {date}"
     msg["From"] = EMAIL_SENDER
-    msg["To"] = EMAIL_RECIPIENT
+    msg["To"] = EMAIL_SENDER
 
     msg.attach(MIMEText(html_body, "html"))
 
     try:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
             server.login(EMAIL_SENDER, EMAIL_APP_PASSWORD)
-            server.sendmail(EMAIL_SENDER, EMAIL_RECIPIENT, msg.as_string())
-        print(f"  Report sent to {EMAIL_RECIPIENT}")
+            server.sendmail(EMAIL_SENDER, recipients, msg.as_string())
+        print(f"  Report sent to: {', '.join(recipients)}")
         return True
     except Exception as e:
         print(f"  Email error: {e}")

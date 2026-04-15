@@ -345,6 +345,8 @@ Define actionable trade parameters:
 5. TIMELINE: Realistic timeframe for the thesis to play out
 6. POSITION SIZING NOTE: Given beta of {overview.get('beta', 'N/A')}, flag if this is a high-volatility position
 
+IMPORTANT: All `price`, `low`, and `high` values must be plain numeric strings like "235.00" — do NOT include a "$" prefix or any currency symbol. The UI and email template add the "$" themselves.
+
 Return a JSON object:
 {{
   "entry_zone": {{

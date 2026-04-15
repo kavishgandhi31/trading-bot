@@ -9,11 +9,22 @@ export async function GET() {
     return NextResponse.json([]);
   }
 
-  const files = fs
+  const allFiles = fs
     .readdirSync(REPORTS_DIR)
     .filter((f) => f.endsWith(".json"))
     .sort()
     .reverse();
+
+  // Keep only the latest report per ticker (filenames are TICKER_YYYY-MM-DD.json,
+  // descending sort puts the newest first).
+  const seen = new Set<string>();
+  const files: string[] = [];
+  for (const f of allFiles) {
+    const ticker = f.split("_")[0].toUpperCase();
+    if (seen.has(ticker)) continue;
+    seen.add(ticker);
+    files.push(f);
+  }
 
   const reports = files.map((file) => {
     const raw = fs.readFileSync(path.join(REPORTS_DIR, file), "utf-8");

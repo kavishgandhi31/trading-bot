@@ -11,6 +11,11 @@ function safe(obj: Record<string, unknown>, ...keys: string[]): string {
   return val != null && val !== "" ? String(val) : "N/A";
 }
 
+// Strip any leading "$" so we never double-prefix when the LLM already included it.
+function stripDollar(v: unknown): string {
+  return String(v ?? "").replace(/^\s*\$\s*/, "");
+}
+
 export default function TradeSetup({
   trade,
 }: {
@@ -23,11 +28,11 @@ export default function TradeSetup({
   const bull = targets?.bull as Record<string, unknown> | undefined;
   const bear = targets?.bear as Record<string, unknown> | undefined;
 
-  const entryLow = entryZone?.low ? `$${entryZone.low}` : "N/A";
-  const entryHigh = entryZone?.high ? `$${entryZone.high}` : "";
+  const entryLow = entryZone?.low ? `$${stripDollar(entryZone.low)}` : "N/A";
+  const entryHigh = entryZone?.high ? `$${stripDollar(entryZone.high)}` : "";
   const entryStr =
     entryLow !== "N/A" && entryHigh ? `${entryLow} – ${entryHigh}` : entryLow;
-  const stopStr = stopLoss?.price ? `$${stopLoss.price}` : "N/A";
+  const stopStr = stopLoss?.price ? `$${stripDollar(stopLoss.price)}` : "N/A";
   const rrRatio = safe(trade, "risk_reward_ratio");
 
   return (
@@ -43,7 +48,7 @@ export default function TradeSetup({
             Base Target
           </div>
           <div className="text-2xl font-extrabold text-emerald-600">
-            ${safe(base ?? {}, "price")}
+            ${stripDollar(safe(base ?? {}, "price"))}
           </div>
           <div className="text-xs text-emerald-700/60 mt-1 line-clamp-2">
             {safe(base ?? {}, "catalyst").slice(0, 80)}
@@ -54,7 +59,7 @@ export default function TradeSetup({
             Bull Target
           </div>
           <div className="text-2xl font-extrabold text-green-600">
-            ${safe(bull ?? {}, "price")}
+            ${stripDollar(safe(bull ?? {}, "price"))}
           </div>
           <div className="text-xs text-green-700/60 mt-1 line-clamp-2">
             {safe(bull ?? {}, "catalyst").slice(0, 80)}
@@ -65,7 +70,7 @@ export default function TradeSetup({
             Bear Target
           </div>
           <div className="text-2xl font-extrabold text-red-500">
-            ${safe(bear ?? {}, "price")}
+            ${stripDollar(safe(bear ?? {}, "price"))}
           </div>
           <div className="text-xs text-red-500/60 mt-1 line-clamp-2">
             {safe(bear ?? {}, "catalyst").slice(0, 80)}
