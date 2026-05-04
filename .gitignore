@@ -46,6 +46,7 @@ backend/reports/archive/*.json
 backend/scheduler/schedules.json
 backend/scheduler/scheduler.log
 backend/config.json
+backend/portfolio.json
 backend/venv/
 backend/chat/*.json
 

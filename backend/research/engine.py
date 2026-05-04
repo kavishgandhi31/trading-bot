@@ -10,6 +10,9 @@ from research.prompts import (
     technicals_prompt,
     bull_bear_verdict_prompt,
     trade_setup_prompt,
+    capital_deployment_prompt,
+    options_overlay_prompt,
+    portfolio_fit_prompt,
 )
 
 load_dotenv()
@@ -18,6 +21,32 @@ client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
 OPUS = "claude-opus-4-6"
 SONNET = "claude-sonnet-4-6"
+
+PORTFOLIO_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "portfolio.json")
+
+
+def load_portfolio_context() -> dict | None:
+    """
+    Read user's portfolio context from backend/portfolio.json. Returns None when
+    the file is missing or empty so the prompt can use its generic-guardrails
+    branch.
+    """
+    if not os.path.exists(PORTFOLIO_FILE):
+        return None
+    try:
+        with open(PORTFOLIO_FILE) as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    has_anything = (
+        data.get("current_holdings")
+        or data.get("sector_exposure_pcts")
+        or data.get("max_single_position_pct")
+        or data.get("max_sector_exposure_pct")
+    )
+    return data if has_anything else None
 
 
 def call_claude(prompt: str, model: str, max_tokens: int = 4000) -> dict:
@@ -53,62 +82,113 @@ def call_claude(prompt: str, model: str, max_tokens: int = 4000) -> dict:
         return {"raw_response": text, "parse_error": True}
 
 
+def _stage_failed(result: dict | None) -> bool:
+    return not result or result.get("parse_error") is True
+
+
 def run_pipeline(ticker: str, stock_data: dict, sec_data: dict, youtube_data: list, congress_data: dict) -> dict:
     overview = stock_data.get("overview", {})
     price_history = stock_data.get("price_history", {})
     financials = stock_data.get("financials", {})
 
-    print(f"  [1/7] Macro screen...")
+    print(f"  [1/10] Macro screen...")
     macro = call_claude(
         macro_screen_prompt(ticker, overview),
         model=SONNET,
         max_tokens=3000,
     )
 
-    print(f"  [2/7] Research foundation...")
+    print(f"  [2/10] Research foundation...")
     foundation = call_claude(
         research_foundation_prompt(ticker, overview, sec_data, financials),
         model=OPUS,
         max_tokens=5000,
     )
 
-    print(f"  [3/7] Valuation...")
+    print(f"  [3/10] Valuation...")
     valuation = call_claude(
         valuation_prompt(ticker, overview, financials, price_history),
         model=OPUS,
         max_tokens=4000,
     )
 
-    print(f"  [4/7] Risk & red teaming...")
+    print(f"  [4/10] Risk & red teaming...")
     risk = call_claude(
         risk_prompt(ticker, overview, sec_data, youtube_data),
         model=OPUS,
         max_tokens=5000,
     )
 
-    print(f"  [5/7] Technicals...")
+    print(f"  [5/10] Technicals...")
     technicals = call_claude(
         technicals_prompt(ticker, price_history, overview),
         model=OPUS,
         max_tokens=3000,
     )
 
-    print(f"  [6/7] Bull/bear/verdict...")
+    print(f"  [6/10] Bull/bear/verdict...")
     verdict = call_claude(
         bull_bear_verdict_prompt(ticker, foundation, valuation, risk, technicals, macro),
         model=OPUS,
         max_tokens=4000,
     )
 
-    print(f"  [7/7] Trade setup...")
+    print(f"  [7/10] Trade setup...")
     trade_setup = call_claude(
         trade_setup_prompt(ticker, price_history, overview, verdict, foundation),
         model=OPUS,
         max_tokens=3000,
     )
 
+    # ── Stages 8–10: How to buy this (depends on trade_setup) ───────────────
+    how_to_buy: dict = {}
+    options_overlay: dict = {}
+    portfolio_fit: dict = {}
+
+    if _stage_failed(trade_setup):
+        print(f"  [8/10] How to buy — SKIPPED (trade setup unavailable)")
+        how_to_buy = {"error": "skipped: trade_setup unavailable"}
+        options_overlay = {"error": "skipped: how_to_buy unavailable"}
+        portfolio_fit = {"error": "skipped: how_to_buy unavailable"}
+    else:
+        print(f"  [8/10] How to buy this...")
+        how_to_buy = call_claude(
+            capital_deployment_prompt(ticker, price_history, overview, verdict, trade_setup, foundation),
+            model=OPUS,
+            max_tokens=4000,
+        )
+
+        if _stage_failed(how_to_buy):
+            print(f"  [9/10] Options overlay — SKIPPED (how_to_buy parse failed)")
+            options_overlay = {"error": "skipped: how_to_buy parse failed"}
+            print(f"  [10/10] Portfolio fit — SKIPPED (how_to_buy parse failed)")
+            portfolio_fit = {"error": "skipped: how_to_buy parse failed"}
+        else:
+            print(f"  [9/10] Options overlay...")
+            options_overlay = call_claude(
+                options_overlay_prompt(ticker, overview, price_history, verdict, trade_setup, how_to_buy),
+                model=OPUS,
+                max_tokens=3500,
+            )
+
+            print(f"  [10/10] Portfolio fit...")
+            portfolio_context = load_portfolio_context()
+            portfolio_fit = call_claude(
+                portfolio_fit_prompt(ticker, overview, how_to_buy, portfolio_context),
+                model=OPUS,
+                max_tokens=2500,
+            )
+
+    from datetime import datetime as _dt
     return {
         "ticker": ticker.upper(),
+        "meta": {
+            "generated_at": _dt.now().isoformat(),
+            "current_price": overview.get("current_price")
+                or price_history.get("current_price"),
+            "beta": overview.get("beta"),
+            "market_cap": overview.get("market_cap"),
+        },
         "macro": macro,
         "foundation": foundation,
         "valuation": valuation,
@@ -116,6 +196,9 @@ def run_pipeline(ticker: str, stock_data: dict, sec_data: dict, youtube_data: li
         "technicals": technicals,
         "verdict": verdict,
         "trade_setup": trade_setup,
+        "how_to_buy": how_to_buy,
+        "options_overlay": options_overlay,
+        "portfolio_fit": portfolio_fit,
         "patch_log": [],
     }
 
@@ -138,7 +221,7 @@ This information has been classified as: {"CONCRETE EVIDENCE — update baseline
 1. What does the author/source get right?
 2. What are they missing or glossing over?
 3. Does this change the bull or bear case? How?
-4. Updated conviction score (1-10): 
+4. Updated conviction score (1-10):
 5. What specifically changed in your view?
 
 Return a JSON object:

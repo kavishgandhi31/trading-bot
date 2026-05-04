@@ -2,12 +2,17 @@ import { NextResponse } from "next/server";
 import { spawn } from "child_process";
 import path from "path";
 import {
-  createJob,
   appendLog,
+  attachProc,
+  cancelJob,
+  createJob,
   finishJob,
   getJob,
   listRecentJobs,
+  listRunningJobs,
   runningJobForTicker,
+  runningJobsCount,
+  MAX_CONCURRENT,
 } from "./jobs";
 
 const TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
@@ -30,6 +35,19 @@ export async function POST(request: Request) {
     );
   }
 
+  // Enforce the concurrent-pipeline cap.
+  if (runningJobsCount() >= MAX_CONCURRENT) {
+    return NextResponse.json(
+      {
+        error: "concurrency_limit",
+        limit: MAX_CONCURRENT,
+        running: listRunningJobs().map((j) => j.ticker),
+        attempted: normalizedTicker,
+      },
+      { status: 409 }
+    );
+  }
+
   const cwd = process.cwd();
   const python = path.join(cwd, "backend", "venv", "bin", "python3.12");
   const backend = path.join(cwd, "backend");
@@ -43,6 +61,7 @@ export async function POST(request: Request) {
     cwd: backend,
     env: { ...process.env, PYTHONUNBUFFERED: "1" },
   });
+  attachProc(job.id, proc);
 
   proc.stdout.on("data", (d: Buffer) => appendLog(job.id, d.toString()));
   proc.stderr.on("data", (d: Buffer) => appendLog(job.id, d.toString()));
@@ -62,7 +81,6 @@ export async function POST(request: Request) {
     finishJob(job.id, { exitCode: null, error: err.message });
   });
 
-  // Return immediately — the pipeline keeps running in the background.
   return NextResponse.json({ jobId: job.id, status: "running" });
 }
 
@@ -78,6 +96,22 @@ export async function GET(request: Request) {
     return NextResponse.json(job);
   }
 
-  // No jobId → return recent jobs (for UI state restoration after refresh).
+  // No jobId → return recent jobs (used to adopt running jobs on mount/refresh).
   return NextResponse.json(listRecentJobs());
+}
+
+export async function DELETE(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const jobId = searchParams.get("jobId");
+  if (!jobId) {
+    return NextResponse.json({ error: "jobId required" }, { status: 400 });
+  }
+  const ok = cancelJob(jobId);
+  if (!ok) {
+    return NextResponse.json(
+      { error: "job not found or not running" },
+      { status: 404 }
+    );
+  }
+  return NextResponse.json({ ok: true });
 }
