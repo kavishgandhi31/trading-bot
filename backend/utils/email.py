@@ -95,6 +95,329 @@ def _section_block(label: str, title: str, content: str) -> str:
 </div>'''
 
 
+# ── How to buy this — email rendering ───────────────────────────────────────
+
+_POSTURE_META = {
+    "deploy_full":    ("DEPLOY FULL",    "#059669", "#ecfdf5"),
+    "deploy_partial": ("DEPLOY PARTIAL", "#10b981", "#ecfdf5"),
+    "starter_only":   ("STARTER ONLY",   "#2563eb", "#eff6ff"),
+    "watch_only":     ("WATCH ONLY",     "#b45309", "#fffbeb"),
+    "avoid":          ("AVOID",          "#dc2626", "#fef2f2"),
+}
+
+
+def _strip_dollar(v):
+    s = str(v) if v is not None else ""
+    return s.lstrip().lstrip("$").lstrip()
+
+
+def _to_float(v):
+    try:
+        return float(_strip_dollar(v).replace(",", ""))
+    except (ValueError, TypeError):
+        return None
+
+
+def _first_sentence(text: str, fallback: str = "") -> str:
+    """Take the first sentence (split on . ! ?) so the email's Right Now strip stays terse."""
+    if not text:
+        return fallback
+    import re
+    m = re.match(r"^[^.!?]+[.!?](?=\s|$)", text.strip())
+    return (m.group(0) if m else text).strip()
+
+
+def _tranche_filled(trigger_type: str, current_price, tranche_level: float) -> bool:
+    """Whether a tranche has fired given the current price and its trigger type.
+
+    Mirror of `trancheState` in
+    app/components/sections/howtobuy/logic.ts. Keep in sync.
+    """
+    if trigger_type in ("post_catalyst", "time_based"):
+        # Event/calendar tranches never auto-fire from price.
+        return False
+    if current_price is None:
+        return False
+    if trigger_type == "breakout":
+        return current_price >= tranche_level
+    # `limit` (default) — buy fills when price drops to or through the level.
+    return current_price <= tranche_level
+
+
+def _right_now_email(plan: dict, current_price):
+    """Compute the "Right Now" strip for the email.
+
+    Mirror of `computeRightNowAction` in
+    app/components/sections/howtobuy/logic.ts. Keep in sync.
+
+    Returns: (background_color, accent_color, headline, detail).
+    """
+    posture = plan.get("posture", "watch_only")
+
+    # ── Posture-based short-circuits ─────────────────────────────────
+    if posture == "avoid":
+        return (
+            "#fef2f2", "#dc2626",
+            "Don't buy this.",
+            _first_sentence(
+                plan.get("do_not_deploy_reason", ""),
+                "The verdict and risk profile don't support buying right now.",
+            ),
+        )
+    if posture == "watch_only":
+        return (
+            "#fffbeb", "#b45309",
+            "Wait — no buy today.",
+            _first_sentence(
+                plan.get("do_not_deploy_reason", ""),
+                "Just watch for now. Wait for the conditions in the plan before buying anything.",
+            ),
+        )
+
+    # ── Resolve & sort tranches by price (highest first) ─────────────
+    stop = _to_float(plan.get("invalidation_price"))
+    priced = []
+    for t in plan.get("tranches") or []:
+        level = _to_float(t.get("price"))
+        if level is None:
+            continue
+        priced.append({
+            **t,
+            "_level": level,
+            "_filled": _tranche_filled(
+                t.get("trigger_type", "limit"), current_price, level
+            ),
+        })
+    priced.sort(key=lambda x: x["_level"], reverse=True)
+
+    if not priced:
+        return ("#f8fafc", "#475569",
+                "No buy steps defined.",
+                plan.get("deployment_summary", "") or "See the buy plan in the app.")
+
+    # ── Stop-loss invalidation overrides everything else ─────────────
+    if current_price is not None and stop is not None and current_price < stop:
+        return ("#fef2f2", "#dc2626",
+                f"Plan cancelled — price dropped below the exit point (${stop:.2f}).",
+                "Don't buy. Run a fresh report before reconsidering this stock.")
+
+    if current_price is None:
+        first = priced[0]
+        return ("#f8fafc", "#475569",
+                "Current price unavailable.",
+                f"First buy is {first['pct_of_total']}% of your budget at ${first['_level']:.2f}.")
+
+    # ── Find what's filled and what's next ───────────────────────────
+    # Prefer a price-based next step (limit/breakout) over an event-based
+    # one, since price-based steps are what fire mechanically as the stock
+    # moves. Event tranches only surface as "next" if every waiting tranche
+    # is event-based.
+    filled = [p for p in priced if p["_filled"]]
+    filled_pct = sum(p.get("pct_of_total", 0) for p in filled)
+    next_price_based = next(
+        (p for p in priced
+         if not p["_filled"]
+         and p.get("trigger_type") not in ("post_catalyst", "time_based")),
+        None,
+    )
+    next_event = next(
+        (p for p in priced if not p["_filled"]),
+        None,
+    )
+    next_step = next_price_based or next_event
+
+    if next_step is None:
+        stop_str = f"${stop:.2f}" if stop is not None else "the exit price"
+        return ("#ecfdf5", "#059669",
+                f"All buys filled ({filled_pct}% of your budget invested).",
+                f"Hold the position. Next decision is the take-profit plan or {stop_str}.")
+
+    direction = "rises to" if next_step.get("trigger_type") == "breakout" else "drops to"
+    is_event = next_step.get("trigger_type") in ("post_catalyst", "time_based")
+
+    if not filled:
+        if is_event:
+            return ("#f8fafc", "#475569",
+                    "No buy yet — first move waits for an event.",
+                    f"Plan to put {next_step['pct_of_total']}% in around ${next_step['_level']:.2f} once it triggers. {next_step.get('condition','')}.")
+        return ("#f8fafc", "#475569",
+                f"Wait — current ${current_price:.2f} hasn't hit the first buy yet.",
+                f"First buy: {next_step['pct_of_total']}% when price {direction} ${next_step['_level']:.2f} ({next_step.get('condition','')}).")
+
+    if is_event:
+        return ("#ecfdf5", "#059669",
+                f"{len(filled)} buy{'s' if len(filled) != 1 else ''} filled ({filled_pct}% invested).",
+                f"Next buy waits for an event: {next_step['pct_of_total']}% at ${next_step['_level']:.2f}. {next_step.get('condition','')}.")
+
+    return ("#ecfdf5", "#059669",
+            f"{len(filled)} buy{'s' if len(filled) != 1 else ''} filled ({filled_pct}% invested).",
+            f"Next buy: {next_step['pct_of_total']}% when price {direction} ${next_step['_level']:.2f} — {next_step.get('condition','')}.")
+
+
+def _allocation_bar_email(deployed_pct: float, dry_powder_pct: float) -> str:
+    deployed = max(0, min(100, deployed_pct or 0))
+    dry = max(0, min(100 - deployed, dry_powder_pct or 0))
+    not_alloc = max(0, 100 - deployed - dry)
+    segments = ""
+    if deployed > 0:
+        segments += f'<td style="background:#10b981;width:{deployed}%"></td>'
+    if dry > 0:
+        segments += f'<td style="background:#60a5fa;width:{dry}%"></td>'
+    if not_alloc > 0:
+        segments += f'<td style="background:#cbd5e1;width:{not_alloc}%"></td>'
+    legend = (
+        f'<span style="display:inline-block;margin-right:14px;font-size:11px;color:#475569">'
+        f'<span style="display:inline-block;width:8px;height:8px;background:#10b981;border-radius:2px;vertical-align:middle;margin-right:4px"></span>'
+        f'<strong style="color:#0f172a">{deployed:.0f}%</strong> deployed</span>'
+        f'<span style="display:inline-block;margin-right:14px;font-size:11px;color:#475569">'
+        f'<span style="display:inline-block;width:8px;height:8px;background:#60a5fa;border-radius:2px;vertical-align:middle;margin-right:4px"></span>'
+        f'<strong style="color:#0f172a">{dry:.0f}%</strong> dry powder</span>'
+    )
+    if not_alloc > 0:
+        legend += (
+            f'<span style="display:inline-block;font-size:11px;color:#475569">'
+            f'<span style="display:inline-block;width:8px;height:8px;background:#cbd5e1;border-radius:2px;vertical-align:middle;margin-right:4px"></span>'
+            f'<strong style="color:#334155">{not_alloc:.0f}%</strong> not allocated</span>'
+        )
+    return f'''<table cellspacing="0" cellpadding="0" style="width:100%;height:10px;border-radius:5px;overflow:hidden;border-collapse:collapse;background:#e2e8f0">
+  <tr style="height:10px">{segments or '<td style="background:#cbd5e1"></td>'}</tr>
+</table>
+<div style="margin-top:8px">{legend}</div>'''
+
+
+def _tranche_table_email(tranches: list) -> str:
+    if not tranches:
+        return '<p style="font-size:13px;color:#94a3b8;font-style:italic;margin:0">No tranches in this plan.</p>'
+    rows = ""
+    for t in tranches:
+        price = _strip_dollar(t.get("price", ""))
+        pct = t.get("pct_of_total", "")
+        condition = t.get("condition", "")
+        trigger = (t.get("trigger_type", "limit") or "limit").replace("_", "-").title()
+        rows += f'''<tr>
+  <td style="padding:8px 10px;border-top:1px solid #f1f5f9;font-family:-apple-system,sans-serif;font-weight:700;color:#0f172a">${price}</td>
+  <td style="padding:8px 10px;border-top:1px solid #f1f5f9;font-family:-apple-system,sans-serif;font-weight:600;color:#059669">{pct}%</td>
+  <td style="padding:8px 10px;border-top:1px solid #f1f5f9;font-size:12px;color:#475569">
+    <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:#64748b">{trigger}</span><br>{condition}
+  </td>
+</tr>'''
+    return f'''<table cellspacing="0" cellpadding="0" style="width:100%;border-collapse:collapse;border:1px solid #e2e8f0;border-radius:6px;overflow:hidden">
+  <thead style="background:#f8fafc">
+    <tr>
+      <th style="text-align:left;padding:8px 10px;font-size:10px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#64748b">Price</th>
+      <th style="text-align:left;padding:8px 10px;font-size:10px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#64748b">% of budget</th>
+      <th style="text-align:left;padding:8px 10px;font-size:10px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#64748b">Trigger / why</th>
+    </tr>
+  </thead>
+  <tbody>{rows}</tbody>
+</table>'''
+
+
+def _how_to_buy_email(report: dict, app_url: str) -> str:
+    plan = report.get("how_to_buy") or {}
+    if not plan or plan.get("error"):
+        return ""
+
+    ticker = report.get("ticker", "N/A")
+    posture = plan.get("posture", "watch_only")
+    label, color, bg = _POSTURE_META.get(posture, ("NEUTRAL", "#6b7280", "#f8fafc"))
+    is_avoid = posture in ("avoid", "watch_only")
+
+    meta = report.get("meta") or {}
+    current_price = _to_float(meta.get("current_price"))
+
+    rn_bg, rn_color, rn_headline, rn_detail = _right_now_email(plan, current_price)
+
+    # Right Now strip
+    right_now_html = f'''<div style="background:{rn_bg};border:1px solid {rn_color}40;border-radius:8px;padding:14px 16px;margin-bottom:18px">
+  <div style="font-size:10px;font-weight:800;letter-spacing:0.15em;text-transform:uppercase;color:{rn_color};margin-bottom:4px">Right now</div>
+  <div style="font-size:15px;font-weight:700;color:#0f172a;margin-bottom:4px;line-height:1.4">{rn_headline}</div>
+  <div style="font-size:13px;color:#475569;line-height:1.6">{rn_detail}</div>
+</div>'''
+
+    # Posture pill row
+    posture_pill = f'<span style="display:inline-block;background:{bg};color:{color};font-size:11px;font-weight:800;letter-spacing:0.08em;padding:5px 12px;border-radius:4px;border:1px solid {color}40">{label}</span>'
+
+    if is_avoid:
+        # Compact body for avoid / watch_only — just the why and triggers
+        reasons_html = ""
+        triggers = plan.get("reevaluate_triggers") or []
+        if triggers:
+            items = "".join(f"<li style='margin-bottom:4px'>{t}</li>" for t in triggers)
+            reasons_html = f'''<div style="margin-top:14px">
+  <div style="font-size:10px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:#64748b;margin-bottom:6px">What would change this</div>
+  <ul style="margin:0;padding-left:20px;color:#334155;font-size:13px;line-height:1.7">{items}</ul>
+</div>'''
+        body = f'''<div style="background:#f8fafc;border-radius:8px;padding:16px 18px">
+  <div style="font-size:10px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:#64748b;margin-bottom:6px">Why this isn't deployable</div>
+  <p style="font-size:14px;color:#1e293b;line-height:1.7;margin:0">{plan.get("do_not_deploy_reason") or plan.get("deployment_summary") or "No clear edge today."}</p>
+  {reasons_html}
+</div>'''
+    else:
+        # Full body: allocation bar + tranche table + summary
+        total_alloc = plan.get("total_allocation_pct", 0)
+        dry_powder = plan.get("dry_powder_pct", 0)
+        risk_per = plan.get("risk_per_trade_pct", 0)
+        summary = plan.get("deployment_summary", "")
+
+        risk_pill = ""
+        if risk_per:
+            risk_pill = f'<span style="font-size:12px;color:#64748b">· <strong style="color:#dc2626">−{risk_per}%</strong> if stopped</span>'
+
+        body = f'''<div style="background:#f8fafc;border-radius:8px;padding:16px 18px;margin-bottom:14px">
+  <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:12px">
+    <div>
+      <span style="font-size:22px;font-weight:800;color:#0f172a">{total_alloc}%</span>
+      <span style="font-size:12px;color:#64748b">of thesis-budget</span>
+      {risk_pill}
+    </div>
+  </div>
+  {_allocation_bar_email(total_alloc, dry_powder)}
+</div>
+
+<div style="margin-bottom:14px">
+  <div style="font-size:10px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:#64748b;margin-bottom:6px">Buy ladder</div>
+  {_tranche_table_email(plan.get("tranches") or [])}
+</div>
+
+{f'<p style="font-size:13px;color:#475569;line-height:1.65;margin:0;background:#f8fafc;border-radius:6px;padding:10px 14px">{summary}</p>' if summary else ''}'''
+
+    # Footer link to the full plan in app
+    footer_extras = []
+    if (report.get("options_overlay") or {}).get("strategies"):
+        footer_extras.append(f"{len(report['options_overlay']['strategies'])} options strategies")
+    if (report.get("portfolio_fit") or {}).get("portfolio_fit_summary"):
+        footer_extras.append("portfolio fit")
+    extras_text = ", ".join(footer_extras) if footer_extras else "sizing math, hold period, tax-lot guidance"
+
+    # Use the report file's slug to deep-link if possible
+    slug_link = ""
+    generated_at = (report.get("meta") or {}).get("generated_at", "")
+    if generated_at:
+        date_part = generated_at[:10]
+        slug_link = f"{app_url.rstrip('/')}/report/{ticker}_{date_part}"
+    else:
+        slug_link = app_url.rstrip("/")
+
+    footer_html = f'''<div style="margin-top:18px;padding-top:14px;border-top:1px solid #e2e8f0;font-size:12px;color:#64748b">
+  + {extras_text} —
+  <a href="{slug_link}" style="color:#059669;font-weight:600;text-decoration:none">view full plan in app →</a>
+</div>'''
+
+    inner = f'''<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+  {posture_pill}
+  <span style="font-size:12px;color:#64748b">{ticker}</span>
+</div>
+{right_now_html}
+{body}
+{footer_html}'''
+
+    return _section_block("How to buy this", "Action plan", inner)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 def build_html_report(report: dict) -> str:
     ticker = report.get("ticker", "N/A")
     date_str = datetime.now().strftime("%B %d, %Y")
@@ -415,6 +738,11 @@ def build_html_report(report: dict) -> str:
     </div>
 
     <p style="font-size:13px;color:#64748b;line-height:1.65;margin:0;padding:10px 12px;background:#f8fafc;border-radius:6px">{_safe(trade, 'trade_summary')[:350]}</p>
+  </div>
+
+  <!-- ═══ HOW TO BUY THIS — top-level zone above Deep Dive ═══ -->
+  <div style="padding:0 32px;border-bottom:1px solid #e2e8f0">
+    {_how_to_buy_email(report, os.getenv("APP_BASE_URL", "http://localhost:3000"))}
   </div>
 
   <!-- ═══ DEEP DIVE SECTIONS (collapsible) ═══ -->

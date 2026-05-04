@@ -134,15 +134,9 @@ export default function ScheduleManager() {
 
   return (
     <div className="space-y-4">
-      {/* Section intro */}
-      <p className="text-xs text-slate-500 leading-relaxed">
-        Run reports automatically on a recurring cadence. Each ticker has its own frequency and email preference.
-        The automation engine must be on for any schedule to fire. For one-off reports, use <span className="font-semibold text-slate-700">Generate a report</span> at the top.
-      </p>
-
       {/* Automation engine control */}
       <div
-        className={`rounded-lg px-5 py-4 border ${
+        className={`rounded-lg p-5 border ${
           schedulerRunning ? "bg-emerald-50 border-emerald-200" : "bg-slate-50 border-slate-200"
         }`}
       >
@@ -196,17 +190,17 @@ export default function ScheduleManager() {
       )}
 
       {/* Add schedule form */}
-      <div className="bg-white rounded-lg border border-slate-200 p-4">
+      <div className="bg-white rounded-lg border border-slate-200 p-5">
         <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">
           Add a recurring ticker
         </div>
-        <form onSubmit={addSchedule} className="flex flex-col sm:flex-row gap-2.5">
+        <form onSubmit={addSchedule} className="flex flex-col sm:flex-row sm:flex-wrap gap-2.5">
           <input
             type="text"
             value={ticker}
             onChange={(e) => setTicker(e.target.value.toUpperCase())}
             placeholder="e.g. NVDA"
-            className="flex-1 sm:max-w-[160px] bg-white border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono font-bold text-slate-900 placeholder:text-slate-400 placeholder:font-sans placeholder:font-normal focus:outline-none focus:border-slate-500"
+            className="flex-1 sm:flex-none sm:w-[140px] min-w-0 bg-white border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono font-bold text-slate-900 placeholder:text-slate-400 placeholder:font-sans placeholder:font-normal focus:outline-none focus:border-slate-500"
           />
           <select
             value={frequency}
@@ -228,60 +222,53 @@ export default function ScheduleManager() {
         {error && <p className="text-xs text-red-600 font-medium mt-2">{error}</p>}
       </div>
 
-      {/* Schedule list */}
+      {/* Schedule list. Card-per-schedule layout — flexes properly in narrow
+          containers like the settings drawer (the previous fixed-column grid
+          collided with itself below ~600px). */}
       {schedules.length === 0 ? (
         <div className="bg-white rounded-lg border border-slate-200 px-5 py-8 text-center">
           <p className="text-sm text-slate-500">No recurring schedules yet.</p>
           <p className="text-xs text-slate-400 mt-1">Add a ticker above to run it automatically.</p>
         </div>
       ) : (
-        <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
-          {/* Column headers */}
-          <div className="grid grid-cols-[auto_auto_1fr_auto_auto_auto] items-center gap-3 px-5 py-2 border-b border-slate-200 bg-slate-50 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-            <span className="w-11">Active</span>
-            <span className="w-16">Ticker</span>
-            <span>Runs</span>
-            <span>Email</span>
-            <span>Last run</span>
-            <span className="w-6" />
-          </div>
-
-          <ul>
-            {schedules.map((s, i) => (
-              <li
-                key={s.id}
-                className={`grid grid-cols-[auto_auto_1fr_auto_auto_auto] items-center gap-3 px-5 py-3 ${
-                  i !== schedules.length - 1 ? "border-b border-slate-100" : ""
-                } ${s.enabled ? "" : "opacity-60"}`}
-              >
+        <ul className="space-y-2">
+          {schedules.map((s) => (
+            <li
+              key={s.id}
+              className={`bg-white rounded-lg border border-slate-200 p-5 ${
+                s.enabled ? "" : "opacity-60"
+              }`}
+            >
+              {/* Top row: identity + primary controls */}
+              <div className="flex items-center gap-2.5">
                 {/* Active toggle */}
                 <button
                   onClick={() => toggleEnabled(s.id, !s.enabled)}
                   role="switch"
                   aria-checked={s.enabled}
-                  className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${
+                  className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${
                     s.enabled ? "bg-emerald-500" : "bg-slate-300"
                   }`}
                   title={s.enabled ? "Enabled — pause this schedule" : "Paused — click to resume"}
                 >
                   <span
-                    className={`absolute top-[3px] left-[3px] w-[18px] h-[18px] bg-white rounded-full shadow transition-transform duration-200 ${
-                      s.enabled ? "translate-x-5" : "translate-x-0"
+                    className={`absolute top-[2px] left-[2px] w-[16px] h-[16px] bg-white rounded-full shadow transition-transform duration-200 ${
+                      s.enabled ? "translate-x-4" : "translate-x-0"
                     }`}
                   />
                 </button>
 
                 {/* Ticker */}
-                <span className="text-base font-extrabold text-slate-900 tracking-tight w-16">
+                <span className="text-[15px] font-extrabold font-mono text-slate-900 tracking-tight shrink-0 min-w-[60px]">
                   {s.ticker}
                 </span>
 
-                {/* Frequency */}
+                {/* Frequency select */}
                 <select
                   value={s.frequency}
                   onChange={(e) => updateFrequency(s.id, e.target.value)}
                   disabled={!s.enabled}
-                  className="text-xs bg-slate-50 border border-slate-200 rounded pl-2.5 pr-6 py-1 text-slate-700 focus:outline-none appearance-none bg-[url('data:image/svg+xml;charset=UTF-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2212%22%20height%3D%2212%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%2394a3b8%22%20stroke-width%3D%222.5%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22m6%209%206%206%206-6%22%2F%3E%3C%2Fsvg%3E')] bg-[length:12px] bg-[right_6px_center] bg-no-repeat w-fit disabled:opacity-60"
+                  className="flex-1 min-w-0 text-[12px] bg-slate-50 border border-slate-200 rounded-md pl-2.5 pr-7 py-1.5 text-slate-700 font-medium focus:outline-none focus:border-slate-400 appearance-none bg-[url('data:image/svg+xml;charset=UTF-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2212%22%20height%3D%2212%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%2394a3b8%22%20stroke-width%3D%222.5%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22m6%209%206%206%206-6%22%2F%3E%3C%2Fsvg%3E')] bg-[length:12px] bg-[right_8px_center] bg-no-repeat disabled:opacity-60"
                   title="How often this ticker runs"
                 >
                   {Object.entries(FREQ_LABELS).map(([val, label]) => (
@@ -292,7 +279,7 @@ export default function ScheduleManager() {
                 {/* Email toggle */}
                 <button
                   onClick={() => toggleEmail(s.id, !s.send_email)}
-                  className={`text-xs font-medium px-2.5 py-1 rounded flex items-center gap-1.5 transition-colors ${
+                  className={`shrink-0 text-[11px] font-semibold px-2 py-1 rounded-md flex items-center gap-1 transition-colors ${
                     s.send_email
                       ? "bg-blue-100 text-blue-700 hover:bg-blue-200"
                       : "bg-slate-100 text-slate-500 hover:bg-slate-200"
@@ -302,6 +289,7 @@ export default function ScheduleManager() {
                       ? "Emails go to all recipients when this runs. Click to disable."
                       : "Emails off. Report still saves to the dashboard. Click to enable."
                   }
+                  aria-label={s.send_email ? "Email enabled" : "Email disabled"}
                 >
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z" />
@@ -310,28 +298,32 @@ export default function ScheduleManager() {
                   {s.send_email ? "On" : "Off"}
                 </button>
 
-                {/* Last run */}
-                <span className="text-[11px] text-slate-500 whitespace-nowrap">
-                  {s.last_run ? timeAgo(s.last_run) : "Never"}
-                </span>
-
                 {/* Delete */}
                 <button
                   onClick={() => deleteSchedule(s.id, s.ticker)}
-                  className="text-slate-300 hover:text-red-500 transition-colors p-1 -mr-1"
+                  className="shrink-0 w-7 h-7 rounded-md flex items-center justify-center text-slate-300 hover:text-red-500 hover:bg-slate-100 transition-colors"
                   title="Remove this schedule"
                   aria-label={`Remove ${s.ticker} schedule`}
                 >
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M3 6h18" />
                     <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
                     <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
                   </svg>
                 </button>
-              </li>
-            ))}
-          </ul>
-        </div>
+              </div>
+
+              {/* Bottom meta line — aligns to card's left edge (not the
+                  ticker), so the card's padding reads even on all sides. */}
+              <div className="text-[11px] text-slate-400 mt-2">
+                Last run:{" "}
+                <span className="text-slate-600 font-medium">
+                  {s.last_run ? timeAgo(s.last_run) : "Never"}
+                </span>
+              </div>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );

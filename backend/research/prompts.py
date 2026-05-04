@@ -316,6 +316,634 @@ Return a JSON object:
 }}"""
 
 
+def capital_deployment_prompt(
+    ticker: str,
+    price_history: dict,
+    overview: dict,
+    verdict: dict,
+    trade_setup: dict,
+    foundation: dict,
+) -> str:
+    catalyst = (foundation.get("catalysts") or [{}])[0] if foundation.get("catalysts") else {}
+    entry_zone = trade_setup.get("entry_zone") or {}
+    stop_loss = trade_setup.get("stop_loss") or {}
+    targets = trade_setup.get("price_targets") or {}
+    base_target = targets.get("base") or {}
+    bull_target = targets.get("bull") or {}
+    bear_target = targets.get("bear") or {}
+    return f"""You are a position-sizing and capital-allocation strategist for {ticker}.
+
+VERDICT: {verdict.get('net_verdict', 'N/A')} (conviction: {verdict.get('conviction_score', 'N/A')}/10)
+Current Price: ${price_history.get('current_price', 'N/A')}
+Beta: {overview.get('beta', 'N/A')}
+Avg Daily Volume (30d): {price_history.get('avg_volume_30d', 'N/A')}
+Market Cap: ${overview.get('market_cap', 'N/A')}
+Entry Zone: ${entry_zone.get('low', 'N/A')} – ${entry_zone.get('high', 'N/A')}
+Stop Loss: ${stop_loss.get('price', 'N/A')}
+Base Target: ${base_target.get('price', 'N/A')}
+Bull Target: ${bull_target.get('price', 'N/A')}
+Bear Target: ${bear_target.get('price', 'N/A')}
+Top Catalyst: {catalyst.get('catalyst', 'N/A')} | Timeline: {catalyst.get('timeline', 'N/A')}
+
+═══ FRAMEWORK ═══
+You are sizing a position for an investor who has already decided how much TOTAL capital they
+are willing to risk on this thesis ("thesis-budget"). Express everything as a PERCENTAGE of
+that thesis-budget — never in dollars or share counts. The investor will multiply your
+percentages by their own dollar amount.
+
+You must give a deployment recommendation for EVERY verdict, not just buys. Even a hold or
+sell can warrant a small probe position, a watch-only stance, or an outright avoid — your job
+is to tell the user honestly whether ANY capital is worth deploying right now, and if so, how.
+
+═══ POSTURE — choose one ═══
+Pick a `posture` based on the verdict, conviction, and setup quality:
+
+  • "deploy_full"   — strong_buy with conviction 8+, clean setup. Use 60–100% of thesis-budget.
+  • "deploy_partial" — buy or strong_buy with conviction 6–8, or strong setup with caveats.
+                       Use 30–60%.
+  • "starter_only"  — buy with conviction <6, OR hold with a credible asymmetric setup
+                       (e.g. trading near support, catalyst pending). Use 5–15% — enough to
+                       have skin in the game and learn, not enough to hurt if wrong. Common
+                       use: "I want exposure if X plays out but I'm not confident enough to
+                       size up." Always disclose that this is a probe, not a full position.
+  • "watch_only"    — hold or weak buy with no clear edge today. Use 0%. The user should
+                       wait for a specific trigger before any deployment. Define that trigger.
+  • "avoid"         — sell, strong_sell, or any verdict where the risk/reward is broken.
+                       Use 0%. Explain what would have to change for this to become
+                       deployable.
+
+The posture drives `total_allocation_pct`. Be honest — do NOT force a starter just to have
+something to say. If the answer is "stay out", say so cleanly.
+
+═══ DEPLOYMENT PLAN ═══
+1. TOTAL ALLOCATION (`total_allocation_pct`, 0–100)
+   The share of the thesis-budget to ultimately put to work. Calibrate to:
+     • Conviction score (higher → larger, but capped by posture).
+     • Beta / volatility (high beta shrinks size meaningfully).
+     • Distance from entry zone (chasing far above the zone → smaller; deep in zone → larger).
+     • Liquidity — if avg daily $-volume is thin relative to a sensible position, shrink the
+       size and flag it in `liquidity_flag`.
+
+2. TRANCHES (laddered entries) — required if posture is `deploy_full`, `deploy_partial`, or
+   `starter_only`. Empty otherwise.
+   Break the total allocation into 1–4 tranches at distinct price levels (1 tranche is fine
+   for a starter; 3–4 for a full deployment averaging into weakness). The sum of
+   `pct_of_total` across all tranches must equal `total_allocation_pct` EXACTLY.
+   Order tranches from highest price (fires first as price drops into the zone) to lowest.
+   For each tranche specify:
+     • `price` — trigger price as a plain numeric string (no "$").
+     • `pct_of_total` — share of the THESIS-BUDGET deployed at this level (0–100).
+     • `trigger_type` — one of: "limit" (price tag), "breakout" (close above level),
+       "post_catalyst" (after specific event), "time_based" (DCA — calendar-driven).
+     • `condition` — one short sentence on what makes this the right add
+       (e.g. "tag of 100-day SMA", "retest of breakout", "first close above 52w high",
+       "after Q3 earnings clears").
+     • `rationale` — one short sentence on WHY this level deserves capital.
+
+3. CATALYST TIMING (`catalyst_timing`)
+   If there's a known near-term catalyst (earnings, FDA, product launch), say explicitly
+   whether to deploy BEFORE the catalyst (taking event risk for a better price), AFTER
+   (waiting for confirmation, paying up for certainty), or SPLIT (some now, some after).
+   If no near-term catalyst, set this to "n/a" and explain.
+
+4. DRY POWDER (`dry_powder_pct`, 0–100)
+   How much of the thesis-budget to hold UNALLOCATED in reserve for: (a) a deeper
+   bear-case flush below the entry zone, (b) adding on a confirmed thesis upgrade, or
+   (c) tactical re-entries after stops. `total_allocation_pct + dry_powder_pct` does not
+   need to equal 100 — the remainder is "do not allocate to this name at all".
+
+5. RISK PER TRADE (`risk_per_trade_pct`)
+   If the FULL planned position were filled at the average tranche price and the stop hit,
+   approximately what % of the thesis-budget would be lost? Compute:
+     loss_pct ≈ total_allocation_pct × (avg_entry − stop) / avg_entry
+   Round to 1 decimal. This tells the user the worst-case dollar damage in pct terms.
+
+6. SCALE-OUT (optional, `scale_out`)
+   1–2 trim levels: a price and the share of the POSITION (not budget) to take off there.
+   Use `pct_of_position` (% of what was actually deployed) so it stays distinct from
+   entry sizing. Empty array if you would rather hold to the targets.
+
+7. INVALIDATION (`invalidation_price`)
+   The exact price below which the deployment plan is void and any unfilled tranches should
+   be abandoned (usually the stop_loss). Plain number.
+
+8. RE-EVALUATION TRIGGERS (`reevaluate_triggers`)
+   2–3 specific events that would force a fresh look at the plan even if no price level is
+   hit (e.g. "guidance cut at next earnings", "key competitor launches X", "Fed pivots
+   hawkish", "30 days with no catalyst progress").
+
+9. LIQUIDITY FLAG (`liquidity_flag`)
+   "ok" | "thin" | "illiquid" — based on avg daily $-volume vs a reasonable position size.
+   For micro-cap or thinly-traded names, flag this so the user uses limit orders and slices
+   entries.
+
+10. SIZING MATH (`sizing_math`) — Kelly / fractional-Kelly sanity check
+    Estimate the rough payoff distribution and what classical sizing math would suggest. This
+    is a SANITY CHECK on the posture-driven `total_allocation_pct`, not a substitute for it.
+    Estimate:
+      • `estimated_win_probability_pct` — your subjective probability the base or bull case
+        plays out before the bear case (0–100). Be honest, not anchored to 50.
+      • `estimated_avg_win_pct` — expected return if the thesis works (use base target as
+        anchor, % above avg entry).
+      • `estimated_avg_loss_pct` — expected loss if the thesis breaks (use stop, % below avg
+        entry).
+      • `kelly_fraction_pct` — full Kelly: ((p × b) − (1 − p)) / b × 100, where p = win
+        probability and b = avg_win / avg_loss. May be negative (means: don't deploy).
+      • `fractional_kelly_recommendation_pct` — quarter-Kelly (kelly_fraction / 4), the
+        practitioner's safe default. Floor at 0 if Kelly is negative.
+      • `agrees_with_posture` — true if `fractional_kelly_recommendation_pct` is within ±15
+        percentage points of `total_allocation_pct`, false otherwise. If false, briefly note
+        in `disagreement_note` whether the posture is more or less aggressive than the math.
+      • `disclaimer` — REQUIRED, copy verbatim: "These probabilities and payoffs are model
+        judgements, not historical statistics. Kelly sizing is a sanity check, not a price
+        target — the posture-driven allocation is the recommendation."
+
+11. HOLD PERIOD (`hold_period`)
+    How long this thesis is meant to live, and when to look at it again.
+      • `expected_hold_days` — approximate days until the base case is expected to play out.
+      • `catalyst_window` — short phrase describing the event window (e.g. "next 2 earnings",
+        "through FY26 product cycle", "open-ended — secular thesis").
+      • `re_eval_cadence` — one of: "weekly", "monthly", "quarterly", "on-event-only".
+      • `notes` — one sentence on what defines the end of the hold (catalyst, target hit,
+        thesis decay).
+
+12. TAX LOT STRATEGY (`tax_lot_strategy`) — generic guidance only
+    For laddered entries this matters because each tranche becomes a separate cost basis.
+      • `ladder_lots_separately` — true if the user should enable per-lot tracking with
+        their broker so each tranche is identifiable, false if it doesn't meaningfully matter
+        for this setup.
+      • `preferred_lot_method` — one of: "FIFO", "LIFO", "HIFO", "specific_id". Recommend
+        based on the scale-out plan: "HIFO" or "specific_id" for staged trims (sell highest-
+        cost lots first to defer gains), "FIFO" if no scale-out planned.
+      • `trim_priority` — short phrase on which lots to sell first when scaling out (e.g.
+        "highest-cost lots first to harvest gains at lowest tax cost", "earliest lots first
+        once they cross 1-year holding for long-term treatment").
+      • `notes` — one sentence on why this matters for THIS setup specifically.
+      • `disclaimer` — REQUIRED, copy verbatim: "Generic guidance only — consult your broker
+        and a tax advisor in your jurisdiction. Rules vary by account type (taxable, IRA,
+        Roth) and country."
+
+13. SUMMARY (`deployment_summary`)
+    2–3 plain-English sentences: posture + total allocation + the shape of the ladder + the
+    one thing that would make you change the plan.
+
+═══ HARD RULES ═══
+• If posture is `watch_only` or `avoid`: `total_allocation_pct` MUST be 0, `tranches` MUST
+  be [], and `do_not_deploy_reason` MUST clearly explain WHY (e.g. "verdict is sell — no
+  long deployment", "valuation is fair, no margin of safety, wait for {ticker} to retest
+  $X before any starter").
+• If posture is `starter_only`: cap `total_allocation_pct` at 15. State explicitly in the
+  summary that this is a PROBE, not a full position.
+• Sum of tranche `pct_of_total` must equal `total_allocation_pct` exactly.
+• Never recommend deploying capital BELOW the invalidation price.
+
+PRICE FORMAT: All `price` and `invalidation_price` values must be plain numeric strings like
+"232.50" — no "$" or currency symbol. The UI adds it.
+
+Return a JSON object with EXACTLY this shape:
+{{
+  "posture": "deploy_full|deploy_partial|starter_only|watch_only|avoid",
+  "should_deploy": true|false,
+  "do_not_deploy_reason": "",
+  "total_allocation_pct": 0-100,
+  "dry_powder_pct": 0-100,
+  "risk_per_trade_pct": 0-100,
+  "catalyst_timing": "before|after|split|n/a — short rationale",
+  "tranches": [
+    {{
+      "price": "...",
+      "pct_of_total": 0-100,
+      "trigger_type": "limit|breakout|post_catalyst|time_based",
+      "condition": "...",
+      "rationale": "..."
+    }}
+  ],
+  "scale_out": [
+    {{
+      "price": "...",
+      "pct_of_position": 0-100,
+      "rationale": "..."
+    }}
+  ],
+  "invalidation_price": "...",
+  "reevaluate_triggers": ["...", "..."],
+  "liquidity_flag": "ok|thin|illiquid",
+  "sizing_math": {{
+    "estimated_win_probability_pct": 0-100,
+    "estimated_avg_win_pct": "...",
+    "estimated_avg_loss_pct": "...",
+    "kelly_fraction_pct": "...",
+    "fractional_kelly_recommendation_pct": "...",
+    "agrees_with_posture": true|false,
+    "disagreement_note": "",
+    "disclaimer": "These probabilities and payoffs are model judgements, not historical statistics. Kelly sizing is a sanity check, not a price target — the posture-driven allocation is the recommendation."
+  }},
+  "hold_period": {{
+    "expected_hold_days": 0,
+    "catalyst_window": "...",
+    "re_eval_cadence": "weekly|monthly|quarterly|on-event-only",
+    "notes": "..."
+  }},
+  "tax_lot_strategy": {{
+    "ladder_lots_separately": true|false,
+    "preferred_lot_method": "FIFO|LIFO|HIFO|specific_id",
+    "trim_priority": "...",
+    "notes": "...",
+    "disclaimer": "Generic guidance only — consult your broker and a tax advisor in your jurisdiction. Rules vary by account type (taxable, IRA, Roth) and country."
+  }},
+  "deployment_summary": "..."
+}}"""
+
+
+def options_overlay_prompt(
+    ticker: str,
+    overview: dict,
+    price_history: dict,
+    verdict: dict,
+    trade_setup: dict,
+    deployment: dict,
+) -> str:
+    posture = deployment.get("posture", "n/a")
+    entry_zone = trade_setup.get("entry_zone") or {}
+    stop_loss = trade_setup.get("stop_loss") or {}
+    targets = trade_setup.get("price_targets") or {}
+    base_target = targets.get("base") or {}
+    bull_target = targets.get("bull") or {}
+    bear_target = targets.get("bear") or {}
+    return f"""You are an options strategist designing a defined-risk overlay for {ticker}.
+
+CONTEXT:
+Verdict: {verdict.get('net_verdict', 'N/A')} (conviction {verdict.get('conviction_score', 'N/A')}/10)
+Current Price: ${price_history.get('current_price', 'N/A')}
+Beta: {overview.get('beta', 'N/A')}
+Posture: {posture}
+Total Allocation Plan: {deployment.get('total_allocation_pct', 'N/A')}% of thesis-budget
+Entry Zone: ${entry_zone.get('low', 'N/A')} – ${entry_zone.get('high', 'N/A')}
+Stop Loss: ${stop_loss.get('price', 'N/A')}
+Base Target: ${base_target.get('price', 'N/A')}
+Bull Target: ${bull_target.get('price', 'N/A')}
+Bear Target: ${bear_target.get('price', 'N/A')}
+
+═══ FRAMEWORK ═══
+Every verdict — bullish, neutral, OR bearish — has appropriate options strategies. Your job
+is to match the strategy to the directional view and conviction, NOT to default to bullish
+strategies. Skipping options entirely is only acceptable when the chain is genuinely unusable
+(see the `applicable: false` escape at the bottom).
+
+Options strategies fall into four buckets:
+
+  1. BULLISH (profit when price rises)
+     • `long_call` — pay premium for leveraged upside
+     • `call_spread` (bull call debit spread) — defined-risk bullish
+     • `csp` (cash-secured put) — get paid to potentially buy lower
+     • `bull_put_spread` (credit spread) — collect premium betting price stays above a level
+     • `cc` (covered call, requires owning shares) — yield on a position
+     • `diagonal` — long-dated long call + short near-term call against it
+
+  2. BEARISH (profit when price falls)
+     • `long_put` — pay premium for leveraged downside
+     • `put_spread` (bear put debit spread) — defined-risk bearish
+     • `bear_call_spread` (credit spread) — collect premium betting price stays below a level
+     • `collar` (requires owning shares) — protective put + covered call, caps both sides
+
+  3. NEUTRAL / SIDEWAYS (profit when price stays in a range)
+     • `iron_condor` — sells a call spread above and a put spread below; profits if price
+        stays between the inner strikes
+     • `calendar_spread` — sells near-term option, buys longer-dated same-strike option;
+        profits from time decay if price stays near strike
+     • `cc` (covered call, if you already own shares) — yields income while range-bound
+
+  4. HIGH-VOLATILITY EVENT BETS (bet a big move happens, direction unknown)
+     • `long_straddle` — long call + long put at same strike; profits if move is large
+        either way (rare recommendation — only flag for binary catalysts)
+
+═══ MATCH TO VERDICT — recommend 1–3 strategies per report ═══
+
+  • verdict=strong_buy → 1–2 bullish + optionally 1 bullish credit (CSP or bull put spread).
+    Examples: long call OR call spread for upside; CSP at deepest tranche.
+  • verdict=buy → 1–2 bullish, lean toward defined-risk (call spread, CSP, bull put spread).
+    Long calls OK only if conviction is at the high end of the buy range.
+  • verdict=hold → 1–2 NEUTRAL strategies (iron condor or calendar spread) as the primary
+    recommendation, since the verdict says "no edge in either direction". Optionally add
+    ONE small bearish OR bullish bet (small put spread / small call spread / CSP at
+    bear-case price = "I'd buy if it crashed") if there's a slight lean.
+  • verdict=sell → 1–2 bearish, lean toward defined-risk (put spread, bear call spread).
+    Long put only if the conviction is at the high end.
+  • verdict=strong_sell → 1–2 bearish, can include outright long puts. Add a bear call
+    spread for income if IV is rich.
+
+If the user owns shares (you don't actually know — but the deployment plan implies they
+might), include `collar` for sell/strong_sell (protective downside) or `cc` for hold
+(yield while range-bound) and label it clearly with "if you already own shares of {ticker}".
+
+═══ HARD RULES ═══
+• You MUST recommend at least one strategy that matches the verdict's directional view —
+  do not default to bullish strategies for hold/sell/strong_sell verdicts.
+• `iron_condor` and `calendar_spread` should be the FIRST recommendations for hold verdicts,
+  not bullish strategies dressed up as "neutral".
+• NEVER recommend naked short calls, naked short puts (without cash secured), short
+  straddles, or short strangles — these have unlimited or near-unlimited risk and are out
+  of scope for this tool. If you'd be tempted to suggest one, use the equivalent defined-risk
+  spread instead (bear call spread instead of naked call, iron condor instead of short
+  strangle).
+• Long straddles are only appropriate when there's a known binary event (earnings, FDA
+  decision) within the option's expiration window. Do not recommend otherwise.
+
+═══ STRATEGY OBJECT SHAPE ═══
+For each strategy specify:
+  • `name` — human-readable strategy name (e.g. "Cash-secured put at $230",
+    "Jan-26 240/270 call spread").
+  • `strategy_type` — one of: "csp" (cash-secured put), "cc" (covered call),
+    "long_call", "long_put", "call_spread" (bull call debit spread),
+    "put_spread" (bear put debit spread), "bull_put_spread" (bullish credit),
+    "bear_call_spread" (bearish credit), "collar" (protective on shares),
+    "diagonal" (long-dated long + short near-term), "iron_condor" (range-bound),
+    "calendar_spread" (time-decay), "long_straddle" (binary event).
+  • `purpose` — "entry_overlay" | "position_overlay" | "directional_overlay" |
+    "income_overlay" (for credit spreads / iron condors / covered calls when the goal
+    is collecting premium, not getting long/short).
+  • `directional_view` — "bullish" | "bearish" | "neutral" | "high_vol_event".
+    This is DETERMINED BY `strategy_type`, NOT a separate judgement. Use this exact
+    mapping — no exceptions:
+        bullish:        csp, long_call, call_spread, bull_put_spread, diagonal
+        bearish:        long_put, put_spread, bear_call_spread
+        neutral:        cc, iron_condor, calendar_spread, collar
+        high_vol_event: long_straddle
+    A bear put spread (`put_spread`) is bearish even on a hold verdict. A long put
+    is bearish even on a hold verdict. Never mark a put-buying strategy as neutral.
+  • `legs` — array of leg objects (1 for single-leg, 2 for spreads/collars):
+        {{ "action": "buy|sell", "right": "call|put", "strike": "...", "expiration_target": "..." }}
+    `expiration_target` should be a window like "30–45 DTE" or "Jan 2026" — not a hard
+    date, since chains change.
+  • `net_premium_direction` — "credit" | "debit".
+  • `est_premium_pct_of_strike` — rough premium as % of the primary strike (e.g. "1.8")
+    — model estimate based on typical IV for this beta/sector. Plain numeric string.
+  • `max_risk_per_contract` — plain numeric string in dollars (per 100-share contract).
+  • `max_gain_per_contract` — plain numeric string in dollars, or "uncapped".
+  • `breakeven` — plain numeric string (price at expiry where strategy nets zero).
+  • `assignment_outcome` — one short sentence on what happens if assigned (especially for
+    csp/cc): "Assigned at $X — same as buying tranche 2 of the deployment plan."
+  • `best_for` — one sentence on the market scenario this wins in.
+  • `not_for` — one sentence on the scenario where this is the wrong tool.
+  • `how_it_works` — REQUIRED. 3–5 plain-English sentences explaining the mechanics for
+    someone with ZERO options experience. Rules for this field:
+      ◦ NO jargon: never use "delta", "theta", "gamma", "vega", "ITM/OTM", "DTE", "leg",
+        "underlying", "intrinsic value", "extrinsic value", "premium decay", "Greeks",
+        "wings", "skew", "IV crush". If you must mention one, define it inline in
+        plain English.
+      ◦ Use the actual strike numbers and expiration window from THIS strategy in the
+        explanation, not generic placeholders.
+      ◦ Cover, in this order: (1) what you do today (buy or sell what, how much it costs
+        or pays), (2) what happens if the stock goes UP, (3) what happens if it goes DOWN,
+        (4) what happens if the stock barely moves and the option expires, (5) what you
+        actually own at the end (shares, cash, or nothing).
+      ◦ Use the word "you" — second person, conversational. Avoid "the trader" or
+        passive voice.
+      ◦ Round numbers when illustrating ("about $180", "roughly 2% of the strike") so the
+        reader doesn't get lost in decimals.
+      ◦ End with the single most important risk in one sentence ("Worst case: you lose
+        the $X premium you paid today" / "Worst case: you're forced to buy 100 shares at
+        $X even if the stock crashes to $Y").
+      ◦ EXAMPLES of the tone you should match:
+          - CSP: "Today you set aside $23,000 in your account and promise your broker
+            you'll buy 100 shares of NVDA at $230 if it drops there by January. In return
+            you collect about $400 in cash today, which is yours to keep no matter what.
+            If NVDA stays above $230, the option expires and you walk away with the $400
+            and your cash freed up. If NVDA drops below $230, you must buy the 100 shares
+            at $230 — but since you collected $400 up front, your real cost is $226 per
+            share. Worst case: NVDA crashes to $150 and you're stuck owning shares worth
+            $15,000 that you paid $22,600 for."
+          - Long put (bear): "Today you pay about $600 for the right (not the obligation)
+            to sell 100 shares of TSLA at $200 anytime before March. You don't need to
+            own any TSLA shares to buy this. If TSLA falls to $150, your option is worth
+            roughly $5,000 — an $4,400 profit on $600 risked. If TSLA rises or stays
+            above $200, the option becomes worthless and you lose the $600 you paid.
+            You're betting the stock drops at least below about $194 (the $200 strike
+            minus the $6 you paid) before March. Worst case: you lose every dollar of
+            the $600 premium."
+          - Put spread (bear): "Today you pay about $200 for a package: you buy the right
+            to sell TSLA at $200 AND simultaneously give someone else the right to buy
+            from you at $180. Net cost: $200 today. If TSLA falls between $180 and $200,
+            you make money — the most you can make is $1,800 if it drops to $180 or
+            lower. If TSLA stays above $200, you lose the $200 you paid. You're trading
+            unlimited downside for a much cheaper bet on a moderate decline. Worst case:
+            you lose the $200 premium."
+
+Then provide:
+  • `iv_context` — one sentence on whether implied vol on this name is generally rich,
+    cheap, or normal vs realized vol, and how that affects strategy choice (rich IV →
+    favor selling premium; cheap IV → favor buying).
+  • `liquidity_warning` — true|false. True for micro-caps, low-volume options chains, or
+    names with wide bid/ask. State the warning in `liquidity_note`.
+  • `coordination_with_shares` — one sentence on how the options overlay coordinates with
+    the share deployment plan (e.g. "CSP at $230 replaces tranche 3 — if assigned, you've
+    bought your deepest tranche at a $X discount via premium").
+  • `disclaimer` — REQUIRED, copy verbatim: "Premium estimates and IV context are model
+    judgements based on typical option pricing for this profile, not live chain quotes.
+    Always check the live chain, bid/ask spread, and open interest before trading. Options
+    can lose 100% of premium and assignment can force share purchases at unfavorable prices."
+
+PRICE FORMAT: Strikes, premiums, breakevens — plain numeric strings, no "$".
+
+If options are NOT a good fit for this name (extremely illiquid chain, no listed options,
+ultra-low IV makes premium-selling pointless, etc.), return:
+{{
+  "applicable": false,
+  "skip_reason": "...",
+  "strategies": [],
+  "iv_context": "...",
+  "liquidity_warning": true|false,
+  "liquidity_note": "...",
+  "coordination_with_shares": "n/a",
+  "disclaimer": "..."
+}}
+
+Otherwise return:
+{{
+  "applicable": true,
+  "skip_reason": "",
+  "strategies": [
+    {{
+      "name": "...",
+      "strategy_type": "csp|cc|long_call|long_put|call_spread|put_spread|bull_put_spread|bear_call_spread|collar|diagonal|iron_condor|calendar_spread|long_straddle",
+      "purpose": "entry_overlay|position_overlay|directional_overlay|income_overlay",
+      "directional_view": "bullish|bearish|neutral|high_vol_event",
+      "legs": [
+        {{ "action": "buy|sell", "right": "call|put", "strike": "...", "expiration_target": "..." }}
+      ],
+      "net_premium_direction": "credit|debit",
+      "est_premium_pct_of_strike": "...",
+      "max_risk_per_contract": "...",
+      "max_gain_per_contract": "...",
+      "breakeven": "...",
+      "assignment_outcome": "...",
+      "best_for": "...",
+      "not_for": "...",
+      "how_it_works": "..."
+    }}
+  ],
+  "iv_context": "...",
+  "liquidity_warning": true|false,
+  "liquidity_note": "",
+  "coordination_with_shares": "...",
+  "disclaimer": "Premium estimates and IV context are model judgements based on typical option pricing for this profile, not live chain quotes. Always check the live chain, bid/ask spread, and open interest before trading. Options can lose 100% of premium and assignment can force share purchases at unfavorable prices."
+}}"""
+
+
+def portfolio_fit_prompt(
+    ticker: str,
+    overview: dict,
+    deployment: dict,
+    portfolio_context: dict | None = None,
+) -> str:
+    """
+    Build a portfolio-fit prompt that adapts to whether the user has supplied any
+    holdings/exposure context.
+
+    `portfolio_context` is OPTIONAL and shaped like:
+      {{
+        "current_holdings": [
+          {{"ticker": "NVDA", "pct_of_portfolio": 12.0, "thesis": "AI infra"}},
+          ...
+        ],
+        "sector_exposure_pcts": {{"Technology": 45, "Energy": 5, ...}},
+        "max_single_position_pct": 10,
+        "max_sector_exposure_pct": 30,
+        "total_portfolio_value": "optional, just for grounding language",
+        "notes": "free-text from the user"
+      }}
+
+    If None or empty, the model gives generic concentration guidance based on sector
+    knowledge and acknowledges that no portfolio context was provided.
+    """
+    has_context = bool(portfolio_context)
+    sector = overview.get("sector", "N/A")
+    industry = overview.get("industry", "N/A")
+    posture = deployment.get("posture", "n/a")
+    total_alloc = deployment.get("total_allocation_pct", "N/A")
+
+    if has_context:
+        holdings = portfolio_context.get("current_holdings", []) or []
+        sector_exposure = portfolio_context.get("sector_exposure_pcts", {}) or {}
+        max_single = portfolio_context.get("max_single_position_pct", "not specified")
+        max_sector = portfolio_context.get("max_sector_exposure_pct", "not specified")
+        notes = portfolio_context.get("notes", "")
+        portfolio_value = portfolio_context.get("total_portfolio_value", "not specified")
+
+        holdings_lines = "\n".join(
+            f"  - {h.get('ticker','?')}: {h.get('pct_of_portfolio','?')}% of portfolio"
+            + (f" ({h.get('thesis','')})" if h.get("thesis") else "")
+            for h in holdings
+        ) or "  (none provided)"
+
+        sector_lines = "\n".join(
+            f"  - {s}: {p}%" for s, p in sector_exposure.items()
+        ) or "  (none provided)"
+
+        context_block = f"""USER-PROVIDED PORTFOLIO CONTEXT:
+Total portfolio value: {portfolio_value}
+Stated max single-position cap: {max_single}%
+Stated max sector exposure cap: {max_sector}%
+
+Current holdings:
+{holdings_lines}
+
+Sector exposure already on:
+{sector_lines}
+
+User notes: {notes if notes else '(none)'}"""
+    else:
+        context_block = """USER-PROVIDED PORTFOLIO CONTEXT: (none — user has not supplied
+holdings or exposure caps.)
+
+Operate from generic prudent-investor guardrails: assume a well-diversified investor would
+cap a single name at ~5–10% and a single sector at ~20–30%, but state explicitly that you
+have no actual portfolio data and these are heuristics."""
+
+    return f"""You are a portfolio-fit reviewer for {ticker}.
+
+POSITION CONTEXT:
+{ticker} — sector: {sector} | industry: {industry}
+Beta: {overview.get('beta', 'N/A')}
+Proposed posture: {posture}
+Proposed total allocation: {total_alloc}% of thesis-budget for THIS name
+
+{context_block}
+
+═══ YOUR JOB ═══
+Assess whether adding {ticker} at the proposed allocation is a sensible portfolio-level
+decision, given the user's existing exposure (or generic guardrails if no context was
+provided). The posture/allocation from the deployment stage is for THIS name in isolation —
+your job is to overlay portfolio context and flag concentration risks.
+
+Cover:
+
+1. CONCENTRATION CHECK
+   • If user provided holdings: compute (proposed allocation × thesis-budget assumption)
+     and compare to their stated single-position cap. Note: you don't know the dollar
+     thesis-budget, so reason in relative terms — "if your thesis-budget for {ticker} is
+     5% of portfolio and you deploy {total_alloc}% of it, that's roughly X% of total
+     portfolio, vs your {max_single if has_context else 'generic'} cap."
+   • Flag if {ticker} is highly correlated with names already held (same sector / same
+     theme / same key driver — e.g. all AI infra, all energy producers, all rate-sensitive).
+   • If user did NOT provide context, give the generic version: "at the proposed sizing,
+     this would be roughly small/moderate/large for a typical portfolio".
+
+2. SECTOR / THEME OVERLAP
+   • If sector exposure data was provided: compare current {sector} exposure + this add to
+     stated max. Call out specifically which existing holdings drive the overlap.
+   • Identify thematic overlap that isn't captured by sector tags (e.g. NVDA + AVGO + AMD
+     are all "Tech" but really one bet on AI infra).
+
+3. CORRELATION-DRIVEN DOWNSIZE
+   If concentration is too high, recommend a SCALED-DOWN allocation specifically for THIS
+   user's portfolio. Format: "reduce total_allocation_pct from {total_alloc}% to X%
+   because <reason>". If no downsize is needed, say so.
+
+4. DIVERSIFICATION FIT
+   How does {ticker} fit the existing book? Is it additive (different risk driver), redundant
+   (more of the same exposure), or hedging (counter-cyclical to current bets)?
+
+5. OUT-OF-SCOPE WARNINGS
+   Briefly note things you CAN'T see and the user should still consider on their own:
+   account-type mix (taxable vs tax-advantaged), liquidity needs, currency exposure,
+   private holdings, etc.
+
+═══ HARD RULES ═══
+• If `portfolio_context` was empty, set `using_user_context` to false and prefix every
+  concentration claim with "without portfolio data, ...".
+• Never claim a specific dollar figure unless the user provided `total_portfolio_value`.
+• If the user-provided caps would be violated, `concentration_risk` must be "high" and
+  `recommended_allocation_adjustment_pct` must be lower than `total_alloc`.
+
+Return a JSON object with EXACTLY this shape:
+{{
+  "using_user_context": true|false,
+  "concentration_risk": "low|moderate|high",
+  "single_position_check": {{
+    "violates_user_cap": true|false,
+    "notes": "..."
+  }},
+  "sector_overlap_check": {{
+    "current_sector_exposure_pct": "...",
+    "post_add_sector_exposure_pct": "...",
+    "violates_user_cap": true|false,
+    "overlapping_holdings": ["..."],
+    "notes": "..."
+  }},
+  "thematic_overlap": {{
+    "themes": ["..."],
+    "overlapping_holdings": ["..."],
+    "notes": "..."
+  }},
+  "diversification_fit": "additive|redundant|hedging",
+  "recommended_allocation_adjustment_pct": 0-100,
+  "adjustment_rationale": "...",
+  "out_of_scope_warnings": ["..."],
+  "portfolio_fit_summary": "2-3 sentence plain-English assessment"
+}}"""
+
+
 def trade_setup_prompt(ticker: str, price_history: dict, overview: dict, verdict: dict, foundation: dict) -> str:
     return f"""You are a risk manager defining the trade parameters for {ticker}.
 
