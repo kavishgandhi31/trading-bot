@@ -36,7 +36,7 @@ export default function DashboardCard({ report }: Props) {
         className={`absolute left-0 top-0 bottom-0 w-1 ${p.accent}`}
       />
 
-      <Link href={`/report/${report.slug}`} className="block p-5 pl-6">
+      <Link href={`/report/${report.slug}`} className="block p-5 pl-6 pb-14">
         <div className="flex items-start justify-between gap-5 flex-wrap">
           {/* Main column */}
           <div className="flex-1 min-w-0">
